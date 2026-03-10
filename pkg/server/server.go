@@ -4240,108 +4240,108 @@ func (s *BgpServer) WatchEvent(ctx context.Context, callbacks WatchEventMessageC
 		return fmt.Errorf("no events to watch")
 	}
 	w := s.watch(opts...)
+	defer w.Stop()
 
-	go func() {
-		defer w.Stop()
+	for {
+		select {
+		case ev, ok := <-w.Event():
+			if !ok {
+				// event channel is closed
+				return nil
+			}
+			switch msg := ev.(type) {
+			case *watchEventUpdate:
+				if callbacks.OnPathUpdate != nil {
+					paths := make([]*apiutil.Path, len(msg.PathList))
+					for i, path := range msg.PathList {
+						paths[i] = toPathApiUtil(path)
+					}
+					callbacks.OnPathUpdate(paths, msg.Timestamp)
+				}
 
-		for {
-			select {
-			case ev := <-w.Event():
-				switch msg := ev.(type) {
-				case *watchEventUpdate:
-					if callbacks.OnPathUpdate != nil {
-						paths := make([]*apiutil.Path, len(msg.PathList))
-						for i, path := range msg.PathList {
-							paths[i] = toPathApiUtil(path)
+			case *watchEventBestPath:
+				if callbacks.OnBestPath != nil {
+					callback := func(paths []*table.Path) {
+						p := make([]*apiutil.Path, len(paths))
+						for i, path := range paths {
+							p[i] = toPathApiUtil(path)
 						}
-						callbacks.OnPathUpdate(paths, msg.Timestamp)
+						callbacks.OnBestPath(p, msg.Timestamp)
 					}
 
-				case *watchEventBestPath:
-					if callbacks.OnBestPath != nil {
-						callback := func(paths []*table.Path) {
-							p := make([]*apiutil.Path, len(paths))
-							for i, path := range paths {
-								p[i] = toPathApiUtil(path)
-							}
-							callbacks.OnBestPath(p, msg.Timestamp)
+					if len(msg.MultiPathList) > 0 {
+						plen := 0
+						for _, pa := range msg.MultiPathList {
+							plen += len(pa)
 						}
-
-						if len(msg.MultiPathList) > 0 {
-							plen := 0
-							for _, pa := range msg.MultiPathList {
-								plen += len(pa)
+						paths := make([]*table.Path, plen)
+						i := 0
+						for _, pa := range msg.MultiPathList {
+							for _, path := range pa {
+								paths[i] = path
+								i++
 							}
-							paths := make([]*table.Path, plen)
-							i := 0
-							for _, pa := range msg.MultiPathList {
-								for _, path := range pa {
-									paths[i] = path
-									i++
-								}
-							}
-							callback(paths)
-						} else {
-							callback(msg.PathList)
 						}
-					}
-
-				case *watchEventEor:
-					if callbacks.OnPathEor != nil {
-						eor := table.NewEOR(msg.Family)
-						eor.SetSource(msg.PeerInfo)
-						callbacks.OnPathEor(toPathApiUtil(eor), msg.Timestamp)
-					}
-
-				case *watchEventPeer:
-					if callbacks.OnPeerUpdate != nil {
-						var admin_state api.PeerState_AdminState
-						switch msg.AdminState {
-						case adminStateUp:
-							admin_state = api.PeerState_ADMIN_STATE_UP
-						case adminStateDown:
-							admin_state = api.PeerState_ADMIN_STATE_DOWN
-						case adminStatePfxCt:
-							admin_state = api.PeerState_ADMIN_STATE_PFX_CT
-						}
-
-						disconnectReason, disconnectMessage := convertFSMStateReasonToAPI(msg.StateReason)
-
-						callbacks.OnPeerUpdate(&apiutil.WatchEventMessage_PeerEvent{
-							Type: msg.Type,
-							Peer: apiutil.Peer{
-								Conf: apiutil.PeerConf{
-									PeerASN:           msg.PeerAS,
-									LocalASN:          msg.LocalAS,
-									NeighborAddress:   msg.PeerAddress,
-									NeighborInterface: msg.PeerInterface,
-								},
-								State: apiutil.PeerState{
-									PeerASN:           msg.PeerAS,
-									LocalASN:          msg.LocalAS,
-									NeighborAddress:   msg.PeerAddress,
-									SessionState:      msg.State,
-									AdminState:        admin_state,
-									RouterID:          msg.PeerID,
-									RemoteCap:         msg.RemoteCap,
-									DisconnectReason:  disconnectReason,
-									DisconnectMessage: disconnectMessage,
-								},
-								Transport: apiutil.Transport{
-									LocalAddress: msg.LocalAddress,
-									LocalPort:    uint32(msg.LocalPort),
-									RemotePort:   uint32(msg.PeerPort),
-								},
-							},
-						}, msg.Timestamp)
+						callback(paths)
+					} else {
+						callback(msg.PathList)
 					}
 				}
-			case <-ctx.Done():
-				return
+
+			case *watchEventEor:
+				if callbacks.OnPathEor != nil {
+					eor := table.NewEOR(msg.Family)
+					eor.SetSource(msg.PeerInfo)
+					callbacks.OnPathEor(toPathApiUtil(eor), msg.Timestamp)
+				}
+
+			case *watchEventPeer:
+				if callbacks.OnPeerUpdate != nil {
+					var admin_state api.PeerState_AdminState
+					switch msg.AdminState {
+					case adminStateUp:
+						admin_state = api.PeerState_ADMIN_STATE_UP
+					case adminStateDown:
+						admin_state = api.PeerState_ADMIN_STATE_DOWN
+					case adminStatePfxCt:
+						admin_state = api.PeerState_ADMIN_STATE_PFX_CT
+					}
+
+					disconnectReason, disconnectMessage := convertFSMStateReasonToAPI(msg.StateReason)
+
+					callbacks.OnPeerUpdate(&apiutil.WatchEventMessage_PeerEvent{
+						Type: msg.Type,
+						Peer: apiutil.Peer{
+							Conf: apiutil.PeerConf{
+								PeerASN:           msg.PeerAS,
+								LocalASN:          msg.LocalAS,
+								NeighborAddress:   msg.PeerAddress,
+								NeighborInterface: msg.PeerInterface,
+							},
+							State: apiutil.PeerState{
+								PeerASN:           msg.PeerAS,
+								LocalASN:          msg.LocalAS,
+								NeighborAddress:   msg.PeerAddress,
+								SessionState:      msg.State,
+								AdminState:        admin_state,
+								RouterID:          msg.PeerID,
+								RemoteCap:         msg.RemoteCap,
+								DisconnectReason:  disconnectReason,
+								DisconnectMessage: disconnectMessage,
+							},
+							Transport: apiutil.Transport{
+								LocalAddress: msg.LocalAddress,
+								LocalPort:    uint32(msg.LocalPort),
+								RemotePort:   uint32(msg.PeerPort),
+							},
+						},
+					}, msg.Timestamp)
+				}
 			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-	}()
-	return nil
+	}
 }
 
 func (s *BgpServer) SetLogLevel(ctx context.Context, r *api.SetLogLevelRequest) error {

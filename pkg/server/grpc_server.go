@@ -468,7 +468,6 @@ func (s *server) WatchEvent(r *api.WatchEventRequest, stream api.GoBgpService_Wa
 	if err != nil {
 		return err
 	}
-	<-ctx.Done()
 	return nil
 }
 
